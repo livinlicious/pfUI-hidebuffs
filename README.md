@@ -2,6 +2,9 @@
 
 A pfUI extension addon that allows you to hide specific buffs from both the global buff display and player unitframe.
 
+![Demo](demo.gif)
+
+
 ## Features
 
 - Hide unwanted buffs by name
