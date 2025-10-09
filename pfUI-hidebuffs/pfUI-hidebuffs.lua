@@ -85,8 +85,8 @@ pfUI:RegisterModule("hidebuffs", "vanilla:tbc", function ()
   local function ApplyBuffFiltering()
     if not pfUI.buff or not pfUI.buff.buffs or not pfUI.buff.buffs.buttons then return end
 
-    -- Build visible buffs if enabled
-    if C.hidebuffs.enabled == "1" then
+    -- Only filter if our addon is enabled AND pfUI buffs are enabled
+    if C.hidebuffs.enabled == "1" and C.buffs.buffs == "1" then
       BuildVisibleBuffs()
 
       -- Apply filtering to helpful buffs
