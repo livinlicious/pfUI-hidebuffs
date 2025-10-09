@@ -6,8 +6,11 @@ pfUI:RegisterModule("hidebuffs", "vanilla:tbc", function ()
   local hiddenBuffNames = {}
   local visibleBuffIndices = {}
   local visibleBuffCount = 0
-  local buffNameCache = {}  -- Cache buff names to avoid repeated tooltip scans
   local lastConfigString = ""  -- Track config changes
+
+  -- Cache for GetPlayerBuff hook (rebuilt on PLAYER_AURAS_CHANGED)
+  local buffMappingCache = {}
+  local buffMappingCacheValid = false
 
   -- Tooltip for getting buff names
   local tooltip = CreateFrame("GameTooltip", "pfUIHideBuffsTooltip", nil, "GameTooltipTemplate")
@@ -38,23 +41,15 @@ pfUI:RegisterModule("hidebuffs", "vanilla:tbc", function ()
     end
   end
 
-  -- Get buff name from buff ID (with caching to avoid repeated tooltip scans)
+  -- Get buff name from buff ID (simple, no cache - buffs change too often)
   local function GetBuffName(buffId)
     if not buffId or buffId < 0 then return nil end
 
-    -- Check cache first
-    if buffNameCache[buffId] then
-      return buffNameCache[buffId]
-    end
-
-    -- Scan with tooltip (expensive)
     tooltip:SetOwner(UIParent, "ANCHOR_NONE")
     tooltip:SetPlayerBuff(buffId)
     local name = pfUIHideBuffsTooltipTextLeft1:GetText()
     tooltip:Hide()
 
-    -- Cache the result
-    buffNameCache[buffId] = name
     return name
   end
 
@@ -135,6 +130,9 @@ pfUI:RegisterModule("hidebuffs", "vanilla:tbc", function ()
 
     -- Replace OnEvent to inject our filtering
     pfUI.buff:SetScript("OnEvent", function()
+      -- Invalidate unitframe buff mapping cache (buffs changed)
+      buffMappingCacheValid = false
+
       -- Get weapon count first
       if C.buffs.weapons == "1" then
         local mh, mhtime, mhcharge, oh, ohtime, ohcharge = GetWeaponEnchantInfo()
@@ -160,83 +158,60 @@ pfUI:RegisterModule("hidebuffs", "vanilla:tbc", function ()
     -- Trigger initial update
     pfUI.buff:GetScript("OnEvent")()
 
-    -- Hook into pfUI unitframes RefreshUnit for player buffs
-    -- We need to completely replace the buff reading logic like we did for global buffs
-    if pfUI.uf and pfUI.uf.RefreshUnit then
-      local originalRefreshUnit = pfUI.uf.RefreshUnit
+    -- Hook GetPlayerBuff API to transparently skip hidden buffs
+    -- This makes unitframes work automatically without any special handling
+    local originalGetPlayerBuff = GetPlayerBuff
 
-      pfUI.uf.RefreshUnit = function(self, unit, component)
-        -- Only intercept player unitframe buff updates
-        if C.hidebuffs.enabled == "1" and unit and unit.label == "player" and unit.buffs and (component == "all" or component == "aura") then
-          ParseHiddenBuffs()
+    -- Function to rebuild the buff mapping cache
+    local function RebuildBuffMappingCache()
+      buffMappingCache = {}
+      ParseHiddenBuffs()
 
-          -- Build list of visible buff indices (exactly like global buff frame)
-          local unitVisibleIndices = {}
-          local actualBuffId = 1
-
-          while actualBuffId <= 32 do
-            local bid = GetPlayerBuff(PLAYER_BUFF_START_ID + actualBuffId, "HELPFUL")
-            if bid < 0 then break end
-
-            local buffName = GetBuffName(bid)
-            if not (buffName and hiddenBuffNames[buffName]) then
-              table.insert(unitVisibleIndices, actualBuffId)
-            end
-            actualBuffId = actualBuffId + 1
-          end
-
-          -- Manually update buff slots using visible buff mapping
-          for i=1, unit.config.bufflimit do
-            if not unit.buffs[i] then break end
-
-            local actualId = unitVisibleIndices[i]
-            if actualId then
-              -- Get the actual buff data
-              local bid = GetPlayerBuff(PLAYER_BUFF_START_ID + actualId, "HELPFUL")
-              local texture = GetPlayerBuffTexture(bid)
-              local stacks = GetPlayerBuffApplications(bid)
-
-              -- Update the buff slot's ID so tooltips work correctly
-              unit.buffs[i].id = actualId
-
-              unit.buffs[i].texture:SetTexture(texture)
-              unit.buffs[i]:Show()
-
-              if stacks > 1 then
-                unit.buffs[i].stacks:SetText(stacks)
-              else
-                unit.buffs[i].stacks:SetText("")
-              end
-
-              -- Update cooldown if exists
-              if unit.buffs[i].cd then
-                local timeleft = GetPlayerBuffTimeLeft(bid)
-                if timeleft and timeleft > 0 then
-                  CooldownFrame_SetTimer(unit.buffs[i].cd, GetTime(), timeleft, 1)
-                else
-                  CooldownFrame_SetTimer(unit.buffs[i].cd, 0, 0, 0)
-                end
-              end
-            else
-              -- No more visible buffs
-              unit.buffs[i]:Hide()
-            end
-          end
-
-          -- Call original for non-buff components
-          if component == "all" then
-            -- Call with each component except aura
-            originalRefreshUnit(self, unit, "base")
-            originalRefreshUnit(self, unit, "portrait")
-            originalRefreshUnit(self, unit, "pvp")
-          elseif component ~= "aura" then
-            originalRefreshUnit(self, unit, component)
-          end
-        else
-          -- Normal flow for non-player or when disabled
-          originalRefreshUnit(self, unit, component)
-        end
+      -- Get weapon buff count to skip them
+      local wepCount = 0
+      if C.buffs and C.buffs.weapons == "1" then
+        local mh, oh = GetWeaponEnchantInfo()
+        wepCount = (mh and 1 or 0) + (oh and 1 or 0)
       end
+
+      -- Build mapping: displayIndex -> buffId
+      local visibleCount = 0
+      local actualBuffId = wepCount + 1
+
+      while actualBuffId <= 32 do
+        local bid = originalGetPlayerBuff(PLAYER_BUFF_START_ID + actualBuffId, "HELPFUL")
+        if bid < 0 then break end
+
+        local buffName = GetBuffName(bid)
+        if not (buffName and hiddenBuffNames[buffName]) then
+          visibleCount = visibleCount + 1
+          buffMappingCache[visibleCount] = bid
+        end
+        actualBuffId = actualBuffId + 1
+      end
+
+      buffMappingCacheValid = true
+    end
+
+    GetPlayerBuff = function(buffSlot, buffFilter)
+      -- Only intercept HELPFUL buff queries when enabled
+      if C.hidebuffs.enabled ~= "1" or buffFilter ~= "HELPFUL" then
+        return originalGetPlayerBuff(buffSlot, buffFilter)
+      end
+
+      -- Calculate what display index is being requested (1-based)
+      local requestedIndex = buffSlot - PLAYER_BUFF_START_ID
+      if requestedIndex < 1 then
+        return originalGetPlayerBuff(buffSlot, buffFilter)
+      end
+
+      -- Rebuild cache if invalid
+      if not buffMappingCacheValid then
+        RebuildBuffMappingCache()
+      end
+
+      -- Return cached mapping
+      return buffMappingCache[requestedIndex] or -1
     end
 
     this:UnregisterAllEvents()
