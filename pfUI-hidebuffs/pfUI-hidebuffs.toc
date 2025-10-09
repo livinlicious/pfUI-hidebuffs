@@ -1,0 +1,8 @@
+## Interface: 11200
+## Title: |cff33ffccpf|cffffffffUI |cffcccccc[Hide Buffs]
+## Author: Livin
+## Notes: Hide specific buffs from pfUI buff and unitframes
+## Version: 1.0
+## Dependencies: pfUI
+
+pfUI-hidebuffs.lua
