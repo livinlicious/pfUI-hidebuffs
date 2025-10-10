@@ -65,8 +65,8 @@ pfUI:RegisterModule("hidebuffs", "vanilla:tbc", function ()
     visibleBuffIndices = {}
     visibleBuffCount = 0
 
-    local wepCount = pfUI.buff.wepbuffs.count or 0
-    local actualBuffId = wepCount + 1
+    -- Start at 1 - weapon buffs are NOT in GetPlayerBuff, they're separate
+    local actualBuffId = 1
 
     while actualBuffId <= 32 do
       local bid = GetPlayerBuff(PLAYER_BUFF_START_ID + actualBuffId, "HELPFUL")
@@ -167,16 +167,10 @@ pfUI:RegisterModule("hidebuffs", "vanilla:tbc", function ()
       buffMappingCache = {}
       ParseHiddenBuffs()
 
-      -- Get weapon buff count to skip them
-      local wepCount = 0
-      if C.buffs and C.buffs.weapons == "1" then
-        local mh, oh = GetWeaponEnchantInfo()
-        wepCount = (mh and 1 or 0) + (oh and 1 or 0)
-      end
-
       -- Build mapping: displayIndex -> buffId
+      -- Start at 1 - weapon buffs are NOT in GetPlayerBuff, they're separate
       local visibleCount = 0
-      local actualBuffId = wepCount + 1
+      local actualBuffId = 1
 
       while actualBuffId <= 32 do
         local bid = originalGetPlayerBuff(PLAYER_BUFF_START_ID + actualBuffId, "HELPFUL")
